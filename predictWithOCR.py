@@ -2,29 +2,40 @@
 
 import hydra
 import torch
-import easyocr
 import cv2
+from paddleocr import PaddleOCR
 from ultralytics.yolo.engine.predictor import BasePredictor
 from ultralytics.yolo.utils import DEFAULT_CONFIG, ROOT, ops
 from ultralytics.yolo.utils.checks import check_imgsz
 from ultralytics.yolo.utils.plotting import Annotator, colors, save_one_box
 
 def getOCR(im, coors):
-    x,y,w, h = int(coors[0]), int(coors[1]), int(coors[2]),int(coors[3])
-    im = im[y:h,x:w]
+    x, y, w, h = int(coors[0]), int(coors[1]), int(coors[2]), int(coors[3])
+    im = im[y:h, x:w]
     conf = 0.2
 
-    gray = cv2.cvtColor(im , cv2.COLOR_RGB2GRAY)
-    results = reader.readtext(gray)
-    ocr = ""
-
-    for result in results:
-        if len(results) == 1:
-            ocr = result[1]
-        if len(results) >1 and len(results[1])>6 and results[2]> conf:
-            ocr = result[1]
+    # Convert to grayscale
+    gray = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY)
     
-    return str(ocr)
+    # Use PaddleOCR to detect text
+    results = ocr.ocr(gray, det=True, rec=True, cls=False)
+    
+    # Handle the case when results is empty
+    if not results or not results[0]:
+        return ""
+    
+    # Process results
+    ocr_text = ""
+    for result in results[0]:  # PaddleOCR returns a list of lists
+        text = result[1][0]  # Get the text
+        confidence = result[1][1]  # Get the confidence score
+        
+        if len(results[0]) == 1:
+            ocr_text = text
+        if len(results[0]) > 1 and len(text) > 6 and confidence > conf:
+            ocr_text = text
+    
+    return str(ocr_text)
 
 class DetectionPredictor(BasePredictor):
 
@@ -39,10 +50,10 @@ class DetectionPredictor(BasePredictor):
 
     def postprocess(self, preds, img, orig_img):
         preds = ops.non_max_suppression(preds,
-                                        self.args.conf,
-                                        self.args.iou,
-                                        agnostic=self.args.agnostic_nms,
-                                        max_det=self.args.max_det)
+                                      self.args.conf,
+                                      self.args.iou,
+                                      agnostic=self.args.agnostic_nms,
+                                      max_det=self.args.max_det)
 
         for i, pred in enumerate(preds):
             shape = orig_img[i].shape if self.webcam else orig_img.shape
@@ -64,7 +75,6 @@ class DetectionPredictor(BasePredictor):
             frame = getattr(self.dataset, 'frame', 0)
 
         self.data_path = p
-        # save_path = str(self.save_dir / p.name)  # im.jpg
         self.txt_path = str(self.save_dir / 'labels' / p.stem) + ('' if self.dataset.mode == 'image' else f'_{frame}')
         log_string += '%gx%g ' % im.shape[2:]  # print string
         self.annotator = self.get_annotator(im0)
@@ -89,16 +99,16 @@ class DetectionPredictor(BasePredictor):
                 c = int(cls)  # integer class
                 label = None if self.args.hide_labels else (
                     self.model.names[c] if self.args.hide_conf else f'{self.model.names[c]} {conf:.2f}')
-                ocr = getOCR(im0,xyxy)
-                if ocr != "":
-                    label = ocr
+                ocr_text = getOCR(im0, xyxy)
+                if ocr_text != "":
+                    label = ocr_text
                 self.annotator.box_label(xyxy, label, color=colors(c, True))
             if self.args.save_crop:
                 imc = im0.copy()
                 save_one_box(xyxy,
-                             imc,
-                             file=self.save_dir / 'crops' / self.model.model.names[c] / f'{self.data_path.stem}.jpg',
-                             BGR=True)
+                           imc,
+                           file=self.save_dir / 'crops' / self.model.model.names[c] / f'{self.data_path.stem}.jpg',
+                           BGR=True)
 
         return log_string
 
@@ -113,5 +123,6 @@ def predict(cfg):
 
 
 if __name__ == "__main__":
-    reader = easyocr.Reader(['en'])
+    # Initialize PaddleOCR with English language
+    ocr = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
     predict()
